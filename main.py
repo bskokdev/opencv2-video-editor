@@ -6,15 +6,18 @@ from typing import Tuple, Union, List
 Frame = np.ndarray
 Pixel = np.ndarray
 
-# Effect types
+# Effect typing
 Effect = Tuple[float, float, str, Union[None, List]]
 Cut = Tuple[float, float]
 
-# Effect names
+# Effect types
 EFFECT_GRAYSCALE = "grayscale"
 EFFECT_CHROMAKEY = "chromakey"
 EFFECT_SHAKY_CAM = "shaky_cam"
 EFFECT_IMAGE = "image"
+
+# Flag for alternating the shaky cam rotation degree (positive || negative)
+shaky_cam_flag = True
 
 
 def apply_grayscale(frame: Frame) -> Frame:
@@ -27,18 +30,37 @@ def apply_chromakey(frame: Frame, effect: Effect) -> Frame:
     return frame
 
 
-def apply_shaky_cam(frame: Frame) -> Frame:
-    return frame
+def apply_shaky_cam(frame: Frame, start_index: int, end_index: int, frame_index: int) -> Frame:
+    if frame_index == start_index or frame_index == end_index:
+        return frame
+
+    rotation_degree = 5
+    """
+    Since we can't alternate based on the even/odd (because of possibly skipping frames we could get only odd frames),
+    we keep the snaky_cam_flag to alternate between positive and negative degree, it's kind of hacky but w/e.
+    """
+    global shaky_cam_flag
+    if shaky_cam_flag:
+        rotation_degree = -rotation_degree
+
+    # create a rotation matrix
+    height, width = frame.shape[:2]
+    center_coordinates = (width // 2, height // 2)
+    rotation_matrix = cv.getRotationMatrix2D(center_coordinates, rotation_degree, 1)
+
+    # Perform the rotation
+    rotated_frame = cv.warpAffine(frame, rotation_matrix, (width, height))
+    shaky_cam_flag = not shaky_cam_flag
+    return rotated_frame
 
 
-def apply_image(frame: Frame, effect: Effect) -> Frame:
+def apply_image(frame: Frame, args: List) -> Frame:
     frame_width, frame_height = frame.shape[:2]
 
-    args = effect[3]
     img_path, pos = args
     image = cv.imread(img_path)
-
     width_start, height_start, width_stop, height_stop = pos
+
     # pos tuple is given in percentage, so we convert to coordinates
     x_start = int(frame_width * width_start)
     y_start = int(frame_height * height_start)
@@ -46,25 +68,29 @@ def apply_image(frame: Frame, effect: Effect) -> Frame:
     y_stop = int(frame_height * height_stop)
 
     # resize, so the image fits the area
-    resized_image = cv.resize(image, (x_stop - x_start, y_stop - y_start))
+    dim = (x_stop - x_start, y_stop - y_start)
+    resized_image = cv.resize(image, dim)
     frame[y_start:y_stop, x_start:x_stop] = resized_image
     return frame
 
 
 # we map each effect name to the function that applies that effect to a frame
-# some effects don't need all parameters, so we return a lambda function which ignores some of them
 effect_callback_map = {
-    EFFECT_GRAYSCALE: lambda frame, _: apply_grayscale(frame),
-    EFFECT_CHROMAKEY: lambda frame, args: apply_chromakey(frame, args),
-    EFFECT_SHAKY_CAM: lambda frame, _: apply_shaky_cam(frame),
-    EFFECT_IMAGE: lambda frame, args: apply_image(frame, args)
+    EFFECT_GRAYSCALE: lambda frame, frame_index, start, end, args: apply_grayscale(frame),
+    EFFECT_CHROMAKEY: lambda frame, frame_index, start, end, args: apply_chromakey(frame, args),
+    EFFECT_SHAKY_CAM: lambda frame, frame_index, start, end, args: apply_shaky_cam(frame, start, end, frame_index),
+    EFFECT_IMAGE: lambda frame, frame_index, start, end, args: apply_image(frame, args)
 }
 
 
-def apply_effect(frame: Frame, effect: Effect) -> Frame:
-    name = effect[2]
+def apply_effect(frame: Frame, effect: Effect, frame_index: int, framerate: float) -> Frame:
+    start, end, effect_type, args = effect
+
+    # TODO(bskokdev): remove debug line
+    print(f"applied effect: {effect_type} on frame: {frame_index}")
+    start, end = convert_effect_period_to_frame_index(start, end, framerate)
     # Calls the correct function which applies the effect on the given frame.
-    return effect_callback_map[name](frame, effect)
+    return effect_callback_map[effect_type](frame, frame_index, start, end, args)
 
 
 def is_effect_active_in_frame(
@@ -73,10 +99,14 @@ def is_effect_active_in_frame(
         effect_end_seconds: float,
         framerate: float
 ) -> bool:
-    # we have to convert start and end markers to frame indexes
-    start_frame = int(effect_start_seconds * framerate) - 1
-    end_frame = int(effect_end_seconds * framerate) - 1
+    start_frame, end_frame = convert_effect_period_to_frame_index(effect_start_seconds, effect_end_seconds, framerate)
     return start_frame <= frame_index <= end_frame
+
+
+def convert_effect_period_to_frame_index(start_seconds: float, end_seconds: float, framerate: float) -> Tuple[int, int]:
+    start_frame = int(start_seconds * framerate) - 1
+    end_frame = int(end_seconds * framerate) - 1
+    return start_frame, end_frame
 
 
 def are_frames_similar(frame_1: Frame, frame2: Frame) -> bool:
@@ -156,7 +186,7 @@ class VideoEditor:
             start, end = effect[:2]
             if not is_effect_active_in_frame(frame_index, start, end, framerate):
                 continue
-            frame = apply_effect(frame, effect)
+            frame = apply_effect(frame, effect, frame_index, framerate)
         return frame
 
     def render(self, output_path: str, width: int, height: int, framerate: float, short: bool = False) -> "VideoEditor":
@@ -204,4 +234,5 @@ if __name__ == "__main__":
      .cut(0, 10)
      .grayscale(25, 30)
      .image(25, 30, "cat.jpg", (0.5, 0, 1, 0.5))
-     .render("output.mp4", 900, 600, 15))
+     .shaky_cam(30, 35)
+     .render("output.mp4", 900, 600, 10))
