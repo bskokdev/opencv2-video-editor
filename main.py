@@ -7,7 +7,7 @@ Frame = np.ndarray
 Pixel = np.ndarray
 
 # Effect typing
-Effect = Tuple[float, float, str, Union[None, List]]
+Effect = Tuple[float, float, str, Union[None, Tuple]]
 Cut = Tuple[float, float]
 
 # Effect types
@@ -25,8 +25,24 @@ def apply_grayscale(frame: Frame) -> Frame:
     return cv.cvtColor(frame, cv.COLOR_GRAY2BGR)
 
 
-def apply_chromakey(frame: Frame, effect: Effect) -> Frame:
-    # this will be done based on the pixel colorings somehow
+def apply_chromakey(frame: Frame, args: Tuple[str, Tuple[int, int, int], int]) -> Frame:
+    img_path, rgb_color, similarity = args
+    width, height, _ = frame.shape
+
+    # read img from path and resize to match the frame dimensions
+    img = cv.imread(img_path)
+    img = cv.resize(img, (height, width))
+
+    # input color is in RGB format, so we convert to BRG
+    bgr_color = np.array(rgb_color[::-1])
+
+    # get total abs difference sum of img pixels and input color; axis=2 means color channel
+    color_diff = np.sum(np.abs(img.astype(int) - bgr_color.astype(int)), axis=2)
+    color_diff_percent = color_diff / (3 * 255) * 100
+
+    # Replace pixels in frame where color difference is below threshold
+    mask = color_diff_percent < similarity
+    frame[mask] = img[mask]
     return frame
 
 
@@ -43,8 +59,8 @@ def apply_shaky_cam(frame: Frame, start_index: int, end_index: int, frame_index:
     if shaky_cam_flag:
         rotation_degree = -rotation_degree
 
-    # create a rotation matrix
-    height, width = frame.shape[:2]
+    # create a rotation matrix; GPT helped here quite a bit
+    height, width, _ = frame.shape
     center_coordinates = (width // 2, height // 2)
     rotation_matrix = cv.getRotationMatrix2D(center_coordinates, rotation_degree, 1)
 
@@ -54,8 +70,8 @@ def apply_shaky_cam(frame: Frame, start_index: int, end_index: int, frame_index:
     return rotated_frame
 
 
-def apply_image(frame: Frame, args: List) -> Frame:
-    frame_width, frame_height = frame.shape[:2]
+def apply_image(frame: Frame, args: Tuple[str, Tuple[float, float, float, float]]) -> Frame:
+    frame_width, frame_height, _ = frame.shape
 
     img_path, pos = args
     image = cv.imread(img_path)
@@ -85,9 +101,6 @@ effect_callback_map = {
 
 def apply_effect(frame: Frame, effect: Effect, frame_index: int, framerate: float) -> Frame:
     start, end, effect_type, args = effect
-
-    # TODO(bskokdev): remove debug line
-    print(f"applied effect: {effect_type} on frame: {frame_index}")
     start, end = convert_effect_period_to_frame_index(start, end, framerate)
     # Calls the correct function which applies the effect on the given frame.
     return effect_callback_map[effect_type](frame, frame_index, start, end, args)
@@ -109,11 +122,17 @@ def convert_effect_period_to_frame_index(start_seconds: float, end_seconds: floa
     return start_frame, end_frame
 
 
-def are_frames_similar(frame_1: Frame, frame2: Frame) -> bool:
-    if frame_1 is None or frame2 is None:
+def are_frames_similar(frame_1: Frame, frame_2: Frame, percentage_treshold: Union[int, float]) -> bool:
+    if frame_1 is None or frame_2 is None:
         return False
-    # this will be done based on the pixel colorings
-    return True
+
+    # Calculate color difference for the entire array
+    color_diff = np.sum(np.abs(frame_1.astype(int) - frame_2.astype(int)), axis=2)
+    avg_diff = np.mean(color_diff)
+
+    # Calculate similarity in percent
+    similarity = (1 - avg_diff / 255) * 100
+    return similarity > percentage_treshold
 
 
 class VideoEditor:
@@ -138,7 +157,7 @@ class VideoEditor:
             color: Tuple[int, int, int],
             similarity: int,
     ) -> "VideoEditor":
-        self.effects.append((start, end, EFFECT_CHROMAKEY, [img_path, color, similarity]))
+        self.effects.append((start, end, EFFECT_CHROMAKEY, (img_path, color, similarity)))
         return self
 
     def shaky_cam(self, start: float, end: float) -> "VideoEditor":
@@ -152,7 +171,7 @@ class VideoEditor:
             img_path: str,
             pos: Tuple[float, float, float, float],
     ) -> "VideoEditor":
-        self.effects.append((start, end, EFFECT_IMAGE, [img_path, pos]))
+        self.effects.append((start, end, EFFECT_IMAGE, (img_path, pos)))
         return self
 
     def cut(self, start: float, end: float) -> "VideoEditor":
@@ -175,11 +194,10 @@ class VideoEditor:
             frame_index: int,
             is_short_render: bool
     ) -> bool:
-        should_write_short = is_short_render and not are_frames_similar(prev_frame, frame)
+        should_write_short = is_short_render and not are_frames_similar(prev_frame, frame, 90)
         is_frame_in_cut = any(is_effect_active_in_frame(frame_index, start, end, framerate) for start, end in self.cuts)
 
-        # return (not is_frame_in_cut and should_write_short) or (not is_frame_in_cut and not is_short_render)
-        return not is_frame_in_cut and not is_short_render
+        return (not is_frame_in_cut and should_write_short) or (not is_frame_in_cut and not is_short_render)
 
     def apply_active_effects(self, frame: Frame, frame_index: int, framerate: float) -> Frame:
         for effect in self.effects:
@@ -230,9 +248,10 @@ class VideoEditor:
 if __name__ == "__main__":
     (VideoEditor()
      .add_video("test.mp4")
+     .chromakey(0, 5, "cat.jpg", (0, 0, 0), 90)
      .grayscale(0, 20)
      .cut(0, 10)
      .grayscale(25, 30)
-     .image(25, 30, "cat.jpg", (0.5, 0, 1, 0.5))
-     .shaky_cam(30, 35)
-     .render("output.mp4", 900, 600, 10))
+     .image(25, 35, "cat.jpg", (0.5, 0, 1, 0.5))
+     .shaky_cam(30, 40)
+     .render("output.mp4", 900, 600, 10, short=False))
