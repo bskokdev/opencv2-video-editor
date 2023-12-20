@@ -17,13 +17,63 @@ EFFECT_SHAKY_CAM = "shaky_cam"
 EFFECT_IMAGE = "image"
 
 
+def apply_grayscale(frame: Frame) -> Frame:
+    frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+    return cv.cvtColor(frame, cv.COLOR_GRAY2BGR)
+
+
+def apply_chromakey(frame: Frame, effect: Effect) -> Frame:
+    # this will be done based on the pixel colorings somehow
+    return frame
+
+
+def apply_shaky_cam(frame: Frame) -> Frame:
+    return frame
+
+
+def apply_image(frame: Frame, effect: Effect) -> Frame:
+    frame_width, frame_height = frame.shape[:2]
+
+    args = effect[3]
+    img_path, pos = args
+    image = cv.imread(img_path)
+
+    width_start, height_start, width_stop, height_stop = pos
+    # pos tuple is given in percentage, so we convert to coordinates
+    x_start = int(frame_width * width_start)
+    y_start = int(frame_height * height_start)
+    x_stop = int(frame_width * width_stop)
+    y_stop = int(frame_height * height_stop)
+
+    # resize, so the image fits the area
+    resized_image = cv.resize(image, (x_stop - x_start, y_stop - y_start))
+    frame[y_start:y_stop, x_start:x_stop] = resized_image
+    return frame
+
+
+# we map each effect name to the function that applies that effect to a frame
+# some effects don't need all parameters, so we return a lambda function which ignores some of them
+effect_callback_map = {
+    EFFECT_GRAYSCALE: lambda frame, _: apply_grayscale(frame),
+    EFFECT_CHROMAKEY: lambda frame, args: apply_chromakey(frame, args),
+    EFFECT_SHAKY_CAM: lambda frame, _: apply_shaky_cam(frame),
+    EFFECT_IMAGE: lambda frame, args: apply_image(frame, args)
+}
+
+
+def apply_effect(frame: Frame, effect: Effect) -> Frame:
+    name = effect[2]
+    # Calls the correct function which applies the effect on the given frame.
+    return effect_callback_map[name](frame, effect)
+
+
 def is_effect_active_in_frame(
         frame_index: int,
         effect_start_seconds: float,
         effect_end_seconds: float,
         framerate: float
 ) -> bool:
-    # convert start and end markers to frame indexes
+    # we have to convert start and end markers to frame indexes
     start_frame = int(effect_start_seconds * framerate) - 1
     end_frame = int(effect_end_seconds * framerate) - 1
     return start_frame <= frame_index <= end_frame
@@ -32,41 +82,8 @@ def is_effect_active_in_frame(
 def are_frames_similar(frame_1: Frame, frame2: Frame) -> bool:
     if frame_1 is None or frame2 is None:
         return False
-
+    # this will be done based on the pixel colorings
     return True
-
-
-def apply_grayscale(frame: Frame) -> Frame:
-    frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-    return cv.cvtColor(frame, cv.COLOR_GRAY2BGR)
-
-
-def apply_chromakey(frame: Frame, effect: Effect) -> Frame:
-    pass
-
-
-def apply_shaky_cam(frame: Frame) -> Frame:
-    pass
-
-
-def apply_image(frame: Frame, effect: Effect) -> Frame:
-    pass
-
-
-# we map each effect name to the function that applies that effect to a frame
-# some effects don't need all parameters, so we return a lambda function which ignores some of them
-effect_callback_map = {
-    EFFECT_GRAYSCALE: lambda frame, _: apply_grayscale(frame),
-    EFFECT_CHROMAKEY: lambda frame, args: apply_chromakey,
-    EFFECT_SHAKY_CAM: lambda frame, _: apply_shaky_cam,
-    EFFECT_IMAGE: lambda frame, args: apply_image
-}
-
-
-def apply_effect(frame: Frame, effect: Effect) -> Frame:
-    _, _, name, _ = effect
-    # Calls the correct function which applies the effect on the given frame.
-    return effect_callback_map[name](frame, effect)
 
 
 class VideoEditor:
@@ -112,27 +129,13 @@ class VideoEditor:
         self.cuts.append((start, end))
         return self
 
-    def get_project_frame_count(self) -> int:
-        """Puts together frame count of the entire project"""
-        total_frame_count = 0
-        for video_path in self.videos:
-            capture = cv.VideoCapture(video_path)
-            total_frame_count += int(capture.get(cv.CAP_PROP_FRAME_COUNT))
-            capture.release()
-        return total_frame_count
-
     def get_avg_project_framerate(self) -> float:
-        """Gets an average framerate of the current project"""
-        fps_sum = 0
+        framerate_sum = 0
         for video_path in self.videos:
             capture = cv.VideoCapture(video_path)
-            fps_sum += capture.get(cv.CAP_PROP_FPS)
+            framerate_sum += capture.get(cv.CAP_PROP_FPS)
             capture.release()
-        return fps_sum / len(self.videos)
-
-    def get_project_length_in_seconds(self) -> float:
-        """Computes the length of the project in seconds"""
-        return self.get_project_frame_count() / self.get_avg_project_framerate()
+        return framerate_sum / len(self.videos)
 
     def should_write_frame(
             self,
@@ -150,7 +153,7 @@ class VideoEditor:
 
     def apply_active_effects(self, frame: Frame, frame_index: int, framerate: float) -> Frame:
         for effect in self.effects:
-            start, end, _, _ = effect
+            start, end = effect[:2]
             if not is_effect_active_in_frame(frame_index, start, end, framerate):
                 continue
             frame = apply_effect(frame, effect)
@@ -194,6 +197,11 @@ class VideoEditor:
         return self
 
 
-# Example Usage
-editor = VideoEditor()
-editor.add_video("test.mp4").grayscale(0, 20).cut(0, 10).grayscale(25, 30).render("output.mp4", 900, 600, 15)
+if __name__ == "__main__":
+    (VideoEditor()
+     .add_video("test.mp4")
+     .grayscale(0, 20)
+     .cut(0, 10)
+     .grayscale(25, 30)
+     .image(25, 30, "cat.jpg", (0.5, 0, 1, 0.5))
+     .render("output.mp4", 900, 600, 15))
