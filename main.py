@@ -62,7 +62,7 @@ def apply_chromakey(frame: Frame, args: Tuple[str, Tuple[int, int, int], int]) -
     return frame
 
 
-def are_frames_similar(frame_1: Frame, frame_2: Frame, similarity_treshold_percent: Union[int, float]) -> bool:
+def are_frames_similar_in_color(frame_1: Frame, frame_2: Frame, similarity_treshold_percent: Union[int, float]) -> bool:
     """
     Checks color similarity of 2 given frames by using numpy operations for faste processing.
     We basically just take an average of the sum of absolute value from differences between 2 pixels.
@@ -301,14 +301,15 @@ class VideoEditor:
         """
         Puts together fps sum of all the videos in the project and calculates the average.
 
-        :return: The average framerate of the entire video project
+        :return: The average framerate of the entire video project or 0 if no videos added
         """
         framerate_sum = 0
+        video_count = len(self.videos)
         for video_path in self.videos:
             capture = cv.VideoCapture(video_path)
             framerate_sum += capture.get(cv.CAP_PROP_FPS)
             capture.release()
-        return framerate_sum / len(self.videos)
+        return framerate_sum / video_count if video_count > 0 else 0
 
     def should_write_frame(
             self,
@@ -330,7 +331,7 @@ class VideoEditor:
         :param is_short_render: Is the render in short version.
         :return: True if we want the current frame to be written to the output, otherwise False.
         """
-        should_write_short = is_short_render and not are_frames_similar(prev_frame, frame, 90)
+        should_write_short = is_short_render and not are_frames_similar_in_color(prev_frame, frame, 90)
         is_frame_in_cut = any(is_effect_active_in_frame(frame_index, start, end, framerate) for start, end in self.cuts)
 
         return (not is_frame_in_cut and should_write_short) or (not is_frame_in_cut and not is_short_render)
@@ -348,7 +349,10 @@ class VideoEditor:
             start, end = effect[:2]
             if not is_effect_active_in_frame(frame_index, start, end, framerate):
                 continue
-            frame = apply_effect(frame, frame_index, effect, framerate)
+            modified_frame = apply_effect(frame, frame_index, effect, framerate)
+            if modified_frame is not None:
+                frame = modified_frame
+
         return frame
 
     def render(self, output_path: str, width: int, height: int, framerate: float, short: bool = False) -> "VideoEditor":
