@@ -10,7 +10,7 @@ Pixel = np.ndarray
 Effect = Tuple[float, float, str, Union[None, Tuple]]
 Cut = Tuple[float, float]
 
-# Effect types
+# Effect name constants
 EFFECT_GRAYSCALE = "grayscale"
 EFFECT_CHROMAKEY = "chromakey"
 EFFECT_SHAKY_CAM = "shaky_cam"
@@ -45,13 +45,15 @@ def apply_chromakey(frame: Frame, args: Tuple[str, Tuple[int, int, int], int]) -
 
     # read img from path and resize to match the frame dimensions
     img = cv.imread(img_path)
+    if img is None:
+        print(f"Cannot open image file: {img_path} during chromakey.")
+        return frame
+
     img = cv.resize(img, (height, width))
 
-    # input color is in RGB format, so we convert the frame to RGB as well
+    # input color is in RGB format, so we convert the frame to RGB as well and then get the color diff
     frame_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
-
-    # get total abs difference sum of img pixels and input color; axis=2 means color channel
-    color_diff = np.sum(np.abs(frame_rgb.astype(int) - np.array(rgb_color).astype(int)), axis=2)
+    color_diff = calc_color_difference(frame_rgb, np.array(rgb_color))
 
     # Replace pixels in frame where color difference is below threshold; GPT helped with the mask hack
     mask = color_diff < similarity
@@ -68,20 +70,23 @@ def are_frames_similar_in_color(frame_1: Frame, frame_2: Frame, similarity_tresh
 
     :param frame_1: First frame to be compared.
     :param frame_2: Second frame to be compared.
-    :param similarity_treshold_percent: Threshold of allowed similarity.
-    :return: True if color similarity between 2 frames > threshold, else False.
+    :param similarity_treshold_percent: Threshold of allowed similarity for the two frames.
+    :return: True if color similarity between frames > threshold, else False.
     """
     if frame_1 is None or frame_2 is None:
         return False
 
-    # Calculate the color difference between 2 frames
-    color_diff = np.sum(np.abs(frame_1.astype(int) - frame_2.astype(int)), axis=2)
+    color_diff = calc_color_difference(frame_1, frame_2)
     avg_diff = np.mean(color_diff)
 
     # Calculate similarity in percent
     similarity = (1 - avg_diff / 255) * 100
 
     return similarity > similarity_treshold_percent
+
+
+def calc_color_difference(a: np.ndarray, b: np.ndarray) -> float:
+    return np.sum(np.abs(a.astype(int) - b.astype(int)), axis=2)
 
 
 def apply_shaky_cam(frame: Frame, start_index: int, end_index: int, frame_index: int) -> Frame:
@@ -102,14 +107,14 @@ def apply_shaky_cam(frame: Frame, start_index: int, end_index: int, frame_index:
 
     rotation_degree = 5
     """
-    Since we can't alternate based on the even/odd (because of possibly skipping frames we could get only odd frames),
+    Since we can't alternate based on the even/odd indexes (possibly skipping frames),
     we keep the snaky_cam_flag to alternate between positive and negative degree, it's kind of hacky but w/e.
     """
     global shaky_cam_flag
     if shaky_cam_flag:
         rotation_degree = -rotation_degree
 
-    # create a rotation matrix; GPT helped here quite a bit
+    # create a rotation matrix; GPT helped quite a bit here
     height, width, _ = frame.shape
     center_coordinates = (width // 2, height // 2)
     rotation_matrix = cv.getRotationMatrix2D(center_coordinates, rotation_degree, 1)
@@ -123,8 +128,13 @@ def apply_shaky_cam(frame: Frame, start_index: int, end_index: int, frame_index:
 def apply_image(frame: Frame, args: Tuple[str, Tuple[float, float, float, float]]) -> Frame:
     frame_width, frame_height, _ = frame.shape
 
+    # img_path is guaranteed to be valid, exception is handled upon image effect event trigger
     img_path, pos = args
     image = cv.imread(img_path)
+    if image is None:
+        print(f"Cannot open image file: {img_path} image.")
+        return frame
+
     width_start, height_start, width_stop, height_stop = pos
 
     # pos tuple is given in percentage, so we convert to coordinates
@@ -132,6 +142,11 @@ def apply_image(frame: Frame, args: Tuple[str, Tuple[float, float, float, float]
     y_start = int(frame_height * height_start)
     x_stop = int(frame_width * width_stop)
     y_stop = int(frame_height * height_stop)
+
+    # Check if the image position is in bounds of the frame
+    if x_start < 0 or y_start < 0 or x_stop > frame_width or y_stop > frame_height:
+        print(f"Image position: {pos} is out of bounds after conversion to coordinates.")
+        return frame
 
     # resize, so the image fits the area
     dim = (x_stop - x_start, y_stop - y_start)
@@ -219,6 +234,24 @@ class VideoEditor:
         :param path: Path to the location of the video to be added to the project.
         :return: Self instance for builder.
         """
+        try:
+            with open(path, 'r'):
+                pass
+        except IOError:
+            print(f"Image file not found at: {path}")
+            return self
+
+        capture = cv.VideoCapture(path)
+        if not capture.isOpened():
+            print(f"Cannot open video file, skipping the video at: {path}")
+            return self
+
+        ret, _ = capture.read()
+        if not ret:
+            print(f"Video file has no frames, skipping the video at: {path}")
+            return self
+
+        capture.release()
         self.videos.append(path)
         return self
 
@@ -251,6 +284,13 @@ class VideoEditor:
         :param similarity: We chromakey every pixel which color difference < similarity (in percent).
         :return: Self instance for builder.
         """
+        try:
+            with open(img_path, 'r'):
+                pass
+        except IOError:
+            print(f"Image file not found at: {img_path}, skipping chromakey effect.")
+            return self
+
         self.effects.append((start, end, EFFECT_CHROMAKEY, (img_path, color, similarity)))
         return self
 
@@ -281,6 +321,13 @@ class VideoEditor:
         :param pos: Position in percent on the frames - (width_start, height_start, width_stop, height_stop)
         :return: Self instance for builder.
         """
+        try:
+            with open(img_path, 'r'):
+                pass
+        except IOError:
+            print(f"Image file not found at: {img_path}, skipping image effect.")
+            return self
+
         self.effects.append((start, end, EFFECT_IMAGE, (img_path, pos)))
         return self
 
@@ -299,15 +346,19 @@ class VideoEditor:
         """
         Puts together fps sum of all the videos in the project and calculates the average.
 
-        :return: The average framerate of the entire video project or 0 if no videos added
+        :return: The average framerate of the entire video project or -inf if no videos were added.
         """
-        framerate_sum = 0
         video_count = len(self.videos)
+        framerate_sum = 0
+        if video_count == 0:
+            return float("-inf")
+
         for video_path in self.videos:
             capture = cv.VideoCapture(video_path)
             framerate_sum += capture.get(cv.CAP_PROP_FPS)
             capture.release()
-        return framerate_sum / video_count if video_count > 0 else 0
+
+        return framerate_sum / video_count
 
     def should_write_frame(
             self,
@@ -344,12 +395,15 @@ class VideoEditor:
         :return: Modified frame with applied effects.
         """
         for effect in self.effects:
-            start, end = effect[:2]
+            start, end, effect_type, _ = effect
+            if effect_type not in effect_callback_map:
+                print(f"Invalid effect type: {effect_type} called on frame index: {frame_index}.")
+                continue
+
             if not is_effect_active_in_frame(frame_index, start, end, framerate):
                 continue
-            modified_frame = apply_effect(frame, frame_index, effect, framerate)
-            if modified_frame is not None:
-                frame = modified_frame
+
+            frame = apply_effect(frame, frame_index, effect, framerate)
 
         return frame
 
@@ -366,6 +420,14 @@ class VideoEditor:
         :param short: Should the video skip frames based on similarity.
         :return: Self instance.
         """
+        if width <= 0 or height <= 0:
+            print("Invalid render resolution.")
+            return self
+
+        if framerate <= 0:
+            print("Cannot render 0 or less frames per second.")
+            return self
+
         dim = (width, height)
         fourcc = cv.VideoWriter_fourcc(*'mp4v')
         out = cv.VideoWriter(output_path, fourcc, framerate, dim, True)
@@ -413,6 +475,6 @@ if __name__ == "__main__":
      .chromakey(0, 5, "cat.jpg", (83, 137, 75), 70)
      .cut(10, 20)
      .grayscale(25, 30)
-     .image(25, 35, "cat.jpg", (0.5, 0, 1, 0.5))
+     .image(25, 35, "cat1.jpg", (0.5, 0, 1, 0.5))
      .shaky_cam(30, 40)
-     .render("output.mp4", 900, 600, 10, short=False))
+     .render("output.mp4", 900, 600, 1, short=False))
