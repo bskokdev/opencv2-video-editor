@@ -41,7 +41,7 @@ def apply_chromakey(frame: Frame, args: Tuple[str, Tuple[int, int, int], int]) -
     :return: Chromakey-ed frame.
     """
     img_path, rgb_color, similarity = args
-    width, height, channels = frame.shape
+    width, height, _ = frame.shape
 
     # read img from path and resize to match the frame dimensions
     img = cv.imread(img_path)
@@ -53,7 +53,7 @@ def apply_chromakey(frame: Frame, args: Tuple[str, Tuple[int, int, int], int]) -
 
     # input color is in RGB format, so we convert the frame to RGB as well and then get the color diff
     frame_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
-    color_diff = calc_color_difference(frame_rgb, np.array(rgb_color))
+    color_diff = calc_total_color_diff(frame_rgb, np.array(rgb_color))
 
     # Replace pixels in frame where color difference is below threshold; GPT helped with the mask hack
     mask = color_diff < similarity
@@ -62,7 +62,9 @@ def apply_chromakey(frame: Frame, args: Tuple[str, Tuple[int, int, int], int]) -
     return frame
 
 
-def are_frames_similar_in_color(frame_1: Frame, frame_2: Frame, similarity_treshold_percent: Union[int, float]) -> bool:
+def are_frames_similar_in_color(
+    frame_1: Frame, frame_2: Frame, similarity_treshold_percent: Union[int, float]
+) -> bool:
     """
     Checks color similarity of 2 given frames by using numpy operations for faste processing.
     We basically just take an average of the sum of absolute value from differences between 2 pixels.
@@ -76,7 +78,7 @@ def are_frames_similar_in_color(frame_1: Frame, frame_2: Frame, similarity_tresh
     if frame_1 is None or frame_2 is None:
         return False
 
-    color_diff = calc_color_difference(frame_1, frame_2)
+    color_diff = calc_total_color_diff(frame_1, frame_2)
     avg_diff = np.mean(color_diff)
 
     # Calculate similarity in percent
@@ -85,11 +87,21 @@ def are_frames_similar_in_color(frame_1: Frame, frame_2: Frame, similarity_tresh
     return similarity > similarity_treshold_percent
 
 
-def calc_color_difference(a: np.ndarray, b: np.ndarray) -> float:
+def calc_total_color_diff(a: np.ndarray, b: np.ndarray) -> float:
+    """
+    Calculates the total color difference between 2 frames by summing the absolute value of the difference between
+    each pixel in the 2 frames.
+
+    :param a: First frame.
+    :param b: Second frame.
+    :return: Total color difference between the 2 frames.
+    """
     return np.sum(np.abs(a.astype(int) - b.astype(int)), axis=2)
 
 
-def apply_shaky_cam(frame: Frame, start_index: int, end_index: int, frame_index: int) -> Frame:
+def apply_shaky_cam(
+    frame: Frame, start_index: int, end_index: int, frame_index: int
+) -> Frame:
     """
     Applies shaking cam effect on a frame. This basically means we apply different rotations on the frame.
     The rotations are alternating based on the global shaky_cam_flag.
@@ -125,7 +137,9 @@ def apply_shaky_cam(frame: Frame, start_index: int, end_index: int, frame_index:
     return rotated_frame
 
 
-def apply_image(frame: Frame, args: Tuple[str, Tuple[float, float, float, float]]) -> Frame:
+def apply_image(
+    frame: Frame, args: Tuple[str, Tuple[float, float, float, float]]
+) -> Frame:
     frame_width, frame_height, _ = frame.shape
 
     # img_path is guaranteed to be valid, exception is handled upon image effect event trigger
@@ -145,7 +159,7 @@ def apply_image(frame: Frame, args: Tuple[str, Tuple[float, float, float, float]
 
     # Check if the image position is in bounds of the frame
     if x_start < 0 or y_start < 0 or x_stop > frame_width or y_stop > frame_height:
-        print(f"Image position: {pos} is out of bounds after conversion to coordinates.")
+        print(f"Image position: {pos} is out of bounds of the current frame, skipping.")
         return frame
 
     # resize, so the image fits the area
@@ -160,14 +174,22 @@ We map each effect name to the function that applies that effect to a frame.
 Each effect function has access to frame, frame index, effect start index, effect end index, and effect arguments.
 """
 effect_callback_map = {
-    EFFECT_GRAYSCALE: lambda frame, frame_index, start, end, args: apply_grayscale(frame),
-    EFFECT_CHROMAKEY: lambda frame, frame_index, start, end, args: apply_chromakey(frame, args),
-    EFFECT_SHAKY_CAM: lambda frame, frame_index, start, end, args: apply_shaky_cam(frame, start, end, frame_index),
-    EFFECT_IMAGE: lambda frame, frame_index, start, end, args: apply_image(frame, args)
+    EFFECT_GRAYSCALE: lambda frame, frame_index, start, end, args: apply_grayscale(
+        frame
+    ),
+    EFFECT_CHROMAKEY: lambda frame, frame_index, start, end, args: apply_chromakey(
+        frame, args
+    ),
+    EFFECT_SHAKY_CAM: lambda frame, frame_index, start, end, args: apply_shaky_cam(
+        frame, start, end, frame_index
+    ),
+    EFFECT_IMAGE: lambda frame, frame_index, start, end, args: apply_image(frame, args),
 }
 
 
-def apply_effect(frame: Frame, frame_index: int, effect: Effect, framerate: float) -> Frame:
+def apply_effect(
+    frame: Frame, frame_index: int, effect: Effect, framerate: float
+) -> Frame:
     """
     Calls the correct function which applies the effect on the given frame.
 
@@ -182,11 +204,40 @@ def apply_effect(frame: Frame, frame_index: int, effect: Effect, framerate: floa
     return effect_callback_map[effect_type](frame, frame_index, start, end, args)
 
 
+def is_render_valid(dim: Tuple[int, int], framerate: float) -> bool:
+    """
+    Checks if the render dimensions and framerate are valid parameters.
+
+    :param dim: Desired dimensions of the rendered video.
+    :param framerate: Desired framerate of the rendered video.
+    """
+    width, height = dim
+    if width <= 0 or height <= 0:
+        print("Invalid render video dimensions")
+        return False
+
+    if framerate <= 0:
+        print("Cannot render 0 or less frames per second.")
+        return False
+
+    return True
+
+
+def get_render_percent(frame_index: int, total_frames: int) -> float:
+    """
+    Calculates current render percentage.
+
+    :param frame_index: Index of the currently rendered project frame.
+    :param total_frames: Total frames in the video project.
+    """
+    return round(((frame_index + 1) / total_frames) * 100, 2)
+
+
 def is_effect_active_in_frame(
-        frame_index: int,
-        effect_start_seconds: float,
-        effect_end_seconds: float,
-        framerate: float
+    frame_index: int,
+    effect_start_seconds: float,
+    effect_end_seconds: float,
+    framerate: float,
 ) -> bool:
     """
     Checks if the frame index is in an interval of an effect.
@@ -198,11 +249,15 @@ def is_effect_active_in_frame(
     :param framerate: Framerate of the project.
     :return: True if frame index is within the effect period, otherwise False.
     """
-    start_frame, end_frame = convert_effect_period_to_frame_index(effect_start_seconds, effect_end_seconds, framerate)
+    start_frame, end_frame = convert_effect_period_to_frame_index(
+        effect_start_seconds, effect_end_seconds, framerate
+    )
     return start_frame <= frame_index <= end_frame
 
 
-def convert_effect_period_to_frame_index(start_seconds: float, end_seconds: float, framerate: float) -> Tuple[int, int]:
+def convert_effect_period_to_frame_index(
+    start_seconds: float, end_seconds: float, framerate: float
+) -> Tuple[int, int]:
     """
     Start and end effect periods are given in seconds, so this function converts them to frame indexes.
 
@@ -235,7 +290,7 @@ class VideoEditor:
         :return: Self instance for builder.
         """
         try:
-            with open(path, 'r'):
+            with open(path, "r"):
                 pass
         except IOError:
             print(f"Image file not found at: {path}")
@@ -267,12 +322,12 @@ class VideoEditor:
         return self
 
     def chromakey(
-            self,
-            start: float,
-            end: float,
-            img_path: str,
-            color: Tuple[int, int, int],
-            similarity: int,
+        self,
+        start: float,
+        end: float,
+        img_path: str,
+        color: Tuple[int, int, int],
+        similarity: int,
     ) -> "VideoEditor":
         """
         Event dispatch which specifies there's chromakey effect applied on frame in (start, end) interval frames.
@@ -285,13 +340,15 @@ class VideoEditor:
         :return: Self instance for builder.
         """
         try:
-            with open(img_path, 'r'):
+            with open(img_path, "r"):
                 pass
         except IOError:
             print(f"Image file not found at: {img_path}, skipping chromakey effect.")
             return self
 
-        self.effects.append((start, end, EFFECT_CHROMAKEY, (img_path, color, similarity)))
+        self.effects.append(
+            (start, end, EFFECT_CHROMAKEY, (img_path, color, similarity))
+        )
         return self
 
     def shaky_cam(self, start: float, end: float) -> "VideoEditor":
@@ -306,11 +363,11 @@ class VideoEditor:
         return self
 
     def image(
-            self,
-            start: float,
-            end: float,
-            img_path: str,
-            pos: Tuple[float, float, float, float],
+        self,
+        start: float,
+        end: float,
+        img_path: str,
+        pos: Tuple[float, float, float, float],
     ) -> "VideoEditor":
         """
         Event dispatch which specifies there's an image placed on frames in (start, end) interval.
@@ -322,7 +379,7 @@ class VideoEditor:
         :return: Self instance for builder.
         """
         try:
-            with open(img_path, 'r'):
+            with open(img_path, "r"):
                 pass
         except IOError:
             print(f"Image file not found at: {img_path}, skipping image effect.")
@@ -349,7 +406,6 @@ class VideoEditor:
         :return: The average framerate of the entire video project or -inf if no videos were added.
         """
         video_count = len(self.videos)
-        framerate_sum = 0
         if video_count == 0:
             return float("-inf")
 
@@ -360,13 +416,27 @@ class VideoEditor:
 
         return framerate_sum / video_count
 
+    def get_project_frames_count(self) -> int:
+        """
+        Puts together frame counts of all the videos in the current video projects.
+
+        :return: The total frames in the entire video project.
+        """
+        total_frames = 0
+        for video_path in self.videos:
+            capture = cv.VideoCapture(video_path)
+            total_frames += int(capture.get(cv.CAP_PROP_FRAME_COUNT))
+            capture.release()
+
+        return total_frames
+
     def should_write_frame(
-            self,
-            prev_frame: Frame,
-            frame: Frame,
-            frame_index: int,
-            framerate: float,
-            is_short_render: bool
+        self,
+        prev_frame: Frame,
+        frame: Frame,
+        frame_index: int,
+        framerate: float,
+        is_short_render: bool,
     ) -> bool:
         """
         Checks if the current frame should be written to the output video.
@@ -380,12 +450,19 @@ class VideoEditor:
         :param is_short_render: Is the render in short version.
         :return: True if we want the current frame to be written to the output, otherwise False.
         """
-        should_write_short = is_short_render and not are_frames_similar_in_color(prev_frame, frame, 90)
-        is_frame_in_cut = any(is_effect_active_in_frame(frame_index, start, end, framerate) for start, end in self.cuts)
+        should_write_short = is_short_render and not are_frames_similar_in_color(
+            prev_frame, frame, 90
+        )
+        is_frame_in_cut = any(
+            is_effect_active_in_frame(frame_index, start, end, framerate)
+            for start, end in self.cuts
+        )
 
-        return (not is_frame_in_cut and should_write_short) or (not is_frame_in_cut and not is_short_render)
+        return (not is_frame_in_cut and should_write_short) or (
+            not is_frame_in_cut and not is_short_render
+        )
 
-    def apply_active_effects(self, frame: Frame, frame_index: int, framerate: float) -> Frame:
+    def apply_effects(self, frame: Frame, frame_index: int, framerate: float) -> Frame:
         """
         Goes through all called effects and applies those which are active for the current frame index.
 
@@ -397,7 +474,7 @@ class VideoEditor:
         for effect in self.effects:
             start, end, effect_type, _ = effect
             if effect_type not in effect_callback_map:
-                print(f"Invalid effect type: {effect_type} called on frame index: {frame_index}.")
+                print(f"Invalid effect: {effect_type} at frame: {frame_index}.")
                 continue
 
             if not is_effect_active_in_frame(frame_index, start, end, framerate):
@@ -407,11 +484,19 @@ class VideoEditor:
 
         return frame
 
-    def render(self, output_path: str, width: int, height: int, framerate: float, short: bool = False) -> "VideoEditor":
+    def render(
+        self,
+        output_path: str,
+        width: int,
+        height: int,
+        framerate: float,
+        short: bool = False,
+    ) -> "VideoEditor":
         """
         Renders the current video project in desired dimensions and framerate.
         The framerate is handled by keeping track of the elapsed time for both the project and rendered video.
         The rendered video has frame skipping based on the color similarity if short == True.
+        This method has a single purpose, so we don't need to split into multiple methods to keep logic in place.
 
         :param output_path: Output video file location.
         :param width: Desired with of the rendered video.
@@ -420,19 +505,20 @@ class VideoEditor:
         :param short: Should the video skip frames based on similarity.
         :return: Self instance.
         """
-        if width <= 0 or height <= 0:
-            print("Invalid render resolution.")
-            return self
-
-        if framerate <= 0:
-            print("Cannot render 0 or less frames per second.")
-            return self
 
         dim = (width, height)
-        fourcc = cv.VideoWriter_fourcc(*'mp4v')
+        if not is_render_valid(dim, framerate):
+            return self
+
+        fourcc = cv.VideoWriter_fourcc(*"mp4v")
         out = cv.VideoWriter(output_path, fourcc, framerate, dim, True)
 
         project_avg_fps = self.get_avg_project_framerate()
+        if project_avg_fps < 0:
+            print(f"Video project has invalid average framerate: {project_avg_fps}")
+            return self
+
+        total_frames = self.get_project_frames_count()
 
         # for how many seconds each frame should be displayed
         project_frame_display_time = 1 / project_avg_fps
@@ -441,27 +527,37 @@ class VideoEditor:
         # These handle the framerate matching
         elapsed_original_time = elapsed_render_time = 0
 
-        prev_frame = None
-        project_frame_index = 0
-        for video_path in self.videos:
+        prev = None
+        frame_index = 0
+        # Go over every video in the current video project
+        for i, video_path in enumerate(self.videos):
             capture = cv.VideoCapture(video_path)
+            if not capture.isOpened():
+                print(
+                    f"Cannot open video in project with index: {i}, skipping this video."
+                )
+                continue
             # Read ith video of the current project
             while True:
                 ret, frame = capture.read()
                 if not ret:
                     break
+                percent = get_render_percent(frame_index, total_frames)
+                print(f"Frame: {frame_index} / {total_frames} | [{percent}%]")
 
                 frame = cv.resize(frame, dim)
                 elapsed_original_time += project_frame_display_time
                 while elapsed_render_time < elapsed_original_time:
                     elapsed_render_time += render_frame_display_time
-                    frame = self.apply_active_effects(frame, project_frame_index, project_avg_fps)
-                    if not self.should_write_frame(prev_frame, frame, project_frame_index, project_avg_fps, short):
+                    frame = self.apply_effects(frame, frame_index, project_avg_fps)
+                    if not self.should_write_frame(
+                        prev, frame, frame_index, project_avg_fps, short
+                    ):
                         continue
                     out.write(frame)
-                    prev_frame = frame
+                    prev = frame
 
-                project_frame_index += 1
+                frame_index += 1
             capture.release()
 
         out.release()
@@ -470,11 +566,13 @@ class VideoEditor:
 
 
 if __name__ == "__main__":
-    (VideoEditor()
-     .add_video("test.mp4")
-     .chromakey(0, 5, "cat.jpg", (83, 137, 75), 70)
-     .cut(10, 20)
-     .grayscale(25, 30)
-     .image(25, 35, "cat1.jpg", (0.5, 0, 1, 0.5))
-     .shaky_cam(30, 40)
-     .render("output.mp4", 900, 600, 1, short=False))
+    (
+        VideoEditor()
+        .add_video("test.mp4")
+        .chromakey(0, 30, "cat.jpg", (83, 137, 75), 70)
+        .cut(10, 20)
+        .grayscale(25, 30)
+        .image(25, 35, "cat.jpg", (0.5, 0, 1, 0.5))
+        .shaky_cam(30, 40)
+        .render("output.mp4", 900, 600, 10, short=False)
+    )
