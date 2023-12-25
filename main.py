@@ -142,7 +142,6 @@ def apply_image(
 ) -> Frame:
     frame_width, frame_height, _ = frame.shape
 
-    # img_path is guaranteed to be valid, exception is handled upon image effect event trigger
     img_path, pos = args
     image = cv.imread(img_path)
     if image is None:
@@ -409,6 +408,7 @@ class VideoEditor:
         if video_count == 0:
             return float("-inf")
 
+        framerate_sum = 0
         for video_path in self.videos:
             capture = cv.VideoCapture(video_path)
             framerate_sum += capture.get(cv.CAP_PROP_FPS)
