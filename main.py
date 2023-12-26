@@ -1,10 +1,11 @@
 import cv2 as cv
 import numpy as np
+import numpy.typing as npt
 from typing import Tuple, Union, List
 
 # Frame related types
-Frame = np.ndarray
-Pixel = np.ndarray
+Frame = npt.NDArray[np.uint8]
+Pixel = npt.NDArray[np.uint8]
 
 # Effect typing
 Effect = Tuple[float, float, str, Union[None, Tuple]]
