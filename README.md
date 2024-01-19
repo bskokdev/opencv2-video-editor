@@ -11,6 +11,7 @@ It allows for applying cuts and several effects to the videos as well as renderi
 - Shaky Camera - Rotates the frames to the left and right at certain speed for a period of time.
 - Adding an image - Allows you to add an image to a time period of the video. The image overlays the video
 - Cut - Removes the frames on the given time period.
+- Rendering - Allow you to render the final project in different framerates from the original videos with applied effects.
 
 ### Example usage
 
