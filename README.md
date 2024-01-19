@@ -13,8 +13,13 @@ It allows for applying cuts and several effects to the videos as well as renderi
 - Cut - Removes the frames on the given time period.
 - Rendering - Allow you to render the final project in different framerates from the original videos with applied effects.
 
-### Example usage
+## How to run
+- Clone the project by `git clone https://github.com/bskokdev/opencv2-video-editor.git`
+- (Optional) Create virtual environment by running `python<version> -m venv <virtual-environment-name>`
+- Install dependencies by `pip3 install -r requirements.txt`
+- Run the `main.py` module
 
+### How to use
 ```python
 if __name__ == "__main__":
     (
